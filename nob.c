@@ -27,6 +27,7 @@ int main(int argc, char** argv){
   Cmd cmd = {0};
 
   nob_cc(&cmd);
+  cmd_append(&cmd,"-ggdb3");
   nob_cc_inputs(&cmd, "./src/main.cpp",temp_sprintf("./src/%s.cpp",LAB_NAME));
   cmd_append(&cmd,RAYLIB_INCLUDES);
   for(int i =0; i < o_files.count;++i){

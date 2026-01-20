@@ -8,6 +8,7 @@
         "name": "(game) Launch",
         "type": "cppdbg",
         "request": "launch",
+        "miDebuggerPath": "${workspaceFolder}/Tools/w64devkit/bin/gdb.exe",
         "program": "${workspaceFolder}/Deployment/game.exe",
         "args": [],
         "stopAtEntry": false,
