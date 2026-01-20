@@ -17,5 +17,8 @@
         "xlocale": "c",
         "__locale": "c"
     },
-    "cmake.configureOnOpen": false
+    "cmake.configureOnOpen": false,
+    "C_Cpp.default.defines": [
+        "__GNUC__"
+    ]
 }

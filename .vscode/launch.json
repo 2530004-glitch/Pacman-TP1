@@ -6,7 +6,7 @@
     "configurations": [
       {
         "name": "(game) Launch",
-        "type": "cppvsdbg",
+        "type": "cppdbg",
         "request": "launch",
         "program": "${workspaceFolder}/Deployment/game.exe",
         "args": [],
@@ -15,14 +15,14 @@
         "preLaunchTask": "Build game"
       },
       {
-        "name": "(knob) Launch",
-        "type": "cppvsdbg",
+        "name": "(nob) Launch",
+        "type": "cppdbg",
         "request": "launch",
-        "program": "${workspaceFolder}/knob.exe",
+        "program": "${workspaceFolder}/nob.exe",
         "args": [],
         "stopAtEntry": false,
         "cwd": "${workspaceRoot}",
-        "preLaunchTask": "Build knob"
+        "preLaunchTask": "Build nob"
       }
     ]
         

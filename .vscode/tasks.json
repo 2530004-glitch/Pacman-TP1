@@ -4,32 +4,25 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build knob",
+            "label": "Build nob",
             "type": "shell",
-            "command": "${workspaceFolder}/Tools/windows_x64/zig.exe",
+            "command": "${workspaceFolder}/Tools/w64devkit/bin/cc.exe",
             "args": [
-                "cc",
-                "-std=c11",
-                "--debug",
-                "-fno-sanitize=undefined",
-                "-fno-omit-frame-pointer",
-                "-target",
-                "x86_64-windows",
-                "knob.c",
+                "-ggdb3",
+                "nob.c",
                 "-o",
-                "knob.exe"
+                "nob.exe"
             ],
             "group": {
                 "kind": "build",
                 "isDefault": true
             },
-            "dependsOn": "Run setup",
         },
         {
             "label": "Build game",
             "type": "shell",
-            "command": "${workspaceFolder}/knob.exe",//"${workspaceFolder}/Tools/windows_x64/zig.exe",
-            "dependsOn": "Build knob",
+            "command": "${workspaceFolder}/nob.exe",//"${workspaceFolder}/Tools/windows_x64/zig.exe",
+            "dependsOn": "Build nob",
         },
         {
             "label": "Run setup",

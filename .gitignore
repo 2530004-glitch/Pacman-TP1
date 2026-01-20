@@ -1,5 +1,6 @@
 build/**
 Deployment/**
-knob.exe
-knob.pdb
+nob.exe
+nob.pdb
 *.zip
+Tools/w64devkit

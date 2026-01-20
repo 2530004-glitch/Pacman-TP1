@@ -13,9 +13,9 @@ Avant de pouvoir construire vous devez rouler dans le terminal de vscode le scri
 
 Après avoir rouler script, vous pouvez cliquer sur `ctrl+shift+b` lorsque l'application à le focus pour construire le code C/C++.
 
-Pour comprendre comment le build fonctionne vous pouvez aller lire le fichier `knob.c` et `.vscode/tasks.json`.
+Pour comprendre comment le build fonctionne vous pouvez aller lire le fichier `nob.c` et `.vscode/tasks.json`.
 
-Pour que la compilation fonctionne, vous devez modifier cette ligne dans `knob.c` et remplacer le nom du fichier par le nom de votre `entrypoint.cpp`:
+Pour que la compilation fonctionne, vous devez modifier cette ligne dans `nob.c` et remplacer le nom du fichier par le nom de votre `entrypoint.cpp`:
 
 ```c
 #define LAB_NAME "entrypoint"
