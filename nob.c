@@ -1,5 +1,3 @@
-#define nob_cc(cmd) nob_cmd_append(cmd, "./Tools/w64devkit/bin/cc.exe")
-
 #define NOB_IMPLEMENTATION
 #define NOB_STRIP_PREFIX
 #include "nob.h"

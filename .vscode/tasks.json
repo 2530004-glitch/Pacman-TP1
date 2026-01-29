@@ -6,7 +6,7 @@
         {
             "label": "Build nob",
             "type": "shell",
-            "command": "${workspaceFolder}/Tools/w64devkit/bin/cc.exe",
+            "command": "cc",
             "args": [
                 "-ggdb3",
                 "nob.c",

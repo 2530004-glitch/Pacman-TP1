@@ -3,4 +3,5 @@ Deployment/**
 nob.exe
 nob.pdb
 *.zip
+*.old
 Tools/w64devkit

@@ -20,5 +20,8 @@
     "cmake.configureOnOpen": false,
     "C_Cpp.default.defines": [
         "__GNUC__"
-    ]
+    ],
+    "terminal.integrated.env.windows": {
+        "PATH": "${workspaceFolder}/Tools/w64devkit/bin;${env:PATH}"
+    }
 }
