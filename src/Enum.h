@@ -1,15 +1,11 @@
-enum class ObjectTag 
-{
-    PacMan,
-    Ghost,
-    Pellet
-};
-//Create a function to use the values for "ObjectTag"
+#pragma once
 
-enum class GhostType
-{
-    Inky,
-    Pinky,
-    Clyde
-};
-//Create a function to use the values for "GhostType"
+/*
+    Enum.h
+    ------
+    This file is a small compatibility header.
+    It simply includes ObjectTag.h so older includes in the project
+    still reach the shared enums used by the Pac-Man game.
+*/
+
+#include "ObjectTag.h"

@@ -1,10 +1,17 @@
 #pragma once
 
+/*
+    entrypoint.h
+    ------------
+    This file exposes the small C-style function that starts the game.
+    The platform-specific startup code in main.cpp calls this function.
+*/
+
 #ifdef __cplusplus
-extern "C"{
+extern "C" {
 #endif
 
-void raylib_start(void);
+void game_start(void);
 
 #ifdef __cplusplus
 }

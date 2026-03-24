@@ -12,7 +12,7 @@
         "program": "${workspaceFolder}/Deployment/game.exe",
         "args": [],
         "stopAtEntry": false,
-        "cwd": "${workspaceRoot}/Deployment",
+        "cwd": "${workspaceRoot}",
         "preLaunchTask": "Build game"
       },
       {
