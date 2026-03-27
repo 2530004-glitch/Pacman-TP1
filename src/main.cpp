@@ -11,6 +11,5 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     (void)nCmdShow;
 
     game_start();
-
     return 0;
 }

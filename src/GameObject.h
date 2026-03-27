@@ -3,14 +3,8 @@
 #include "ObjectTag.h"
 #include "Vector2D.h"
 
-/*
-    GameObject.h
-    ------------
-    This file defines the base GameObject class.
-    Every visible or updatable thing in the game inherits from this class,
-    including Pac-Man, ghosts, and pellets.
-*/
-
+// Base class for every visible or updatable thing in the game.
+// Pac-Man, ghosts, and pellets all inherit from this.
 class GameObject
 {
 protected:

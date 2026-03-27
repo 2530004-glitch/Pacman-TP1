@@ -1,30 +1,25 @@
 #pragma once
 
-/*
-    ObjectTag.h
-    -----------
-    This file stores the plain enums used across the whole Pac-Man game.
-    These enums help the rest of the code identify objects, ghost types,
-    and ghost behavior states without using hard to read numbers.
-*/
-
+// Tags that identify what kind of object something is.
 enum ObjectTag
 {
-    TAG_PACMAN,   // Used to identify the Pac-Man object
-    TAG_GHOST,    // Used to identify any ghost object
-    TAG_PELLET    // Used to identify any pellet object
+    TAG_PACMAN,
+    TAG_GHOST,
+    TAG_PELLET
 };
 
+// Which ghost this is. Each ghost has different AI behavior.
 enum GhostType
 {
-    GHOST_INKY,   // Green ghost that patrols its quadrant until Pac-Man enters it
-    GHOST_PINKY,  // Yellow ghost that targets tiles in front of Pac-Man
-    GHOST_CLYDE   // Orange ghost that chases or retreats based on distance
+    GHOST_INKY,   // Patrols the top-right quadrant; chases Pac-Man when he enters it
+    GHOST_PINKY,  // Targets a few tiles ahead of Pac-Man
+    GHOST_CLYDE   // Chases when far away, retreats when close
 };
 
+// What a ghost is currently doing.
 enum GhostState
 {
-    GHOST_STATE_CHASE,       // Normal ghost behavior
-    GHOST_STATE_FRIGHTENED,  // Blue ghost behavior after Pac-Man eats a cherry
-    GHOST_STATE_EATEN        // Ghost returning to the ghost house after being eaten
+    GHOST_STATE_CHASE,      // Normal chasing behavior
+    GHOST_STATE_FRIGHTENED, // Turned blue after Pac-Man eats a cherry
+    GHOST_STATE_EATEN       // Returning at spawn position after being eaten
 };

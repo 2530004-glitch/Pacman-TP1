@@ -3,29 +3,16 @@
 #include "GameManager.h"
 #include "raylib.h"
 
-/*
-    Game.h
-    ------
-    This file defines the main Game class.
-    The Game class owns the window loop, menu screens, game state, and all
-    textures. It also owns the GameManager, which handles the actual Pac-Man
-    gameplay inside the maze.
-*/
-
+// This is the main Game class. Owns the window loop, menus, textures, and state transitions.
+// All actual gameplay happens inside the GameManager, Game just decides which screen to show.
 class Game
 {
 public:
-    enum StateType
-    {
-        MainMenuState,
-        PlayingState,
-        GameOverState,
-        VictoryState,
-        RulesState
-    };
+    enum State { MainMenu, Playing, GameOver, Victory, Rules };
 
 private:
     GameManager manager;
+
     Texture2D pacManTexture;
     Texture2D coinTexture;
     Texture2D bigCoinTexture;
@@ -34,32 +21,24 @@ private:
     Texture2D clydeTexture;
     Texture2D frightenedTexture;
     Texture2D wallTexture;
+
     float deltaTime;
     float stateTimer;
-    StateType state;
-    int menuSelection;
-    bool assetsLoaded;
+    State state;
+    int   menuSelection;
+    bool  assetsLoaded;
 
-    void LoadRequiredTexture(Texture2D* texture, const char* path);
-    void LoadCherryTexture(Texture2D* texture);
     void LoadAssets();
     void UnloadAssets();
-    void UnloadTextureIfLoaded(Texture2D* texture);
 
     void DrawMenu() const;
-    void DrawMenuTitle() const;
-    void DrawMenuButtons() const;
-    void DrawMenuHints() const;
     void DrawRulesScreen() const;
-    void DrawRulesControls() const;
-    void DrawRulesObjective() const;
-    void DrawRulesScoring() const;
     void DrawEndScreen(const char* title, const char* subtitle, Color color) const;
 
-    void UpdateMainMenu();
-    void UpdateRulesState();
-    void UpdatePlayingState();
-    void UpdateEndingState();
+    void UpdateMenu();
+    void UpdateRules();
+    void UpdatePlaying();
+    void UpdateEnding();
 
 public:
     Game();
@@ -71,6 +50,6 @@ public:
     void end();
 
     float GetDeltaTime() const;
-    StateType GetState() const;
-    void SetState(StateType nextState);
+    State GetState() const;
+    void  SetState(State next);
 };

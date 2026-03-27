@@ -3,15 +3,8 @@
 #include "GameObject.h"
 #include "raylib.h"
 
-/*
-    Ghost.h
-    -------
-    This file defines the Ghost class.
-    A Ghost inherits from GameObject and stores its type, movement state,
-    release timer, chase target logic, and drawing data. The GameManager
-    creates three Ghost objects and updates them each frame.
-*/
-
+// A ghost in the maze. Each ghost type has its own AI targeting logic.
+// Ghosts can chase, become frightened (blue), or return home after being eaten.
 class GameManager;
 
 class Ghost : public GameObject
@@ -20,35 +13,29 @@ private:
     GameManager* manager;
     Texture2D* chaseTexture;
     Texture2D* frightenedTexture;
-    GhostType ghostType;
-    Vector2D spawnPosition;
-    Vector2D currentDirection;
-    Vector2D patrolTarget;
-    float moveSpeed;
+    GhostType  ghostType;
+    Vector2D   spawnPosition;
+    Vector2D   currentDirection;
+    Vector2D   patrolTarget;
+    float      moveSpeed;
     GhostState state;
-    bool allowReverse;
-    float releaseTimer;
-    float bounceTimer;
-    bool waitingForRelease;
-    bool exitingHouse;
+    bool       allowReverse;
+    float      releaseTimer;
+    float      bounceTimer;
+    bool       waitingForRelease;
+    bool       exitingHouse;
 
+    float    GetReleaseDelay() const;
+    int      GetDoorColumn() const;
+    int      GetMazeExitColumn() const;
+    float    GetCurrentSpeed() const;
     Vector2D GetChaseTarget() const;
-    Vector2D GetPinkyTarget(Vector2D pacTile, Vector2D pacDirection) const;
-    Vector2D GetInkyTarget(Vector2D pacTile) const;
-    Vector2D GetClydeTarget(Vector2D pacTile) const;
-    float GetReleaseDelay() const;
-    int GetDoorColumn() const;
-    int GetMazeExitColumn() const;
-    float GetCurrentSpeed() const;
-    Vector2D GetDoorCenter() const;
-    Vector2D GetHallwayCenter() const;
-    Vector2D GetMazeExitCenter() const;
     Vector2D GetCurrentExitTarget() const;
+
     void UpdateWaitingInsideHouse(float deltaTime);
     void StartLeavingHouse();
     void UpdateExitFromHouse(float distance);
     void MoveTowardPoint(Vector2D target, float distance);
-    void ChooseDirectionAtIntersection();
     void MoveThroughMaze(float distance);
     void FinishEatenTripIfNeeded();
 
@@ -61,13 +48,13 @@ public:
           Texture2D* blueTexture);
 
     GhostType GetGhostType() const;
-    Vector2D GetDirection() const;
-    bool IsFrightened() const;
-    bool IsEaten() const;
-    void SetFrightened();
-    void SetEaten();
-    void SetChase();
-    void ResetPosition();
+    Vector2D  GetDirection() const;
+    bool      IsFrightened() const;
+    bool      IsEaten() const;
+    void      SetFrightened();
+    void      SetEaten();
+    void      SetChase();
+    void      ResetPosition();
 
     void Render();
     void Update();

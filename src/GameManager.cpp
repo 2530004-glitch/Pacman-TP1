@@ -1,11 +1,3 @@
-/*
-    GameManager.cpp
-    ---------------
-    This file implements the GameManager class.
-    The GameManager loads the map, creates gameplay objects, handles input,
-    collisions, frightened mode, ghost movement choices, and maze rendering.
-*/
-
 #include "GameManager.h"
 
 #include <cmath>
@@ -13,452 +5,277 @@
 #include <fstream>
 
 #include "Game.h"
-#include "GameObject.h"
 #include "Ghost.h"
 #include "PacMan.h"
 #include "Pellet.h"
 
-static const int DEFAULT_MAP_WIDTH = 28;
-static const int DEFAULT_MAP_HEIGHT = 31;
-static const int GHOST_HOUSE_TARGET_COLUMN = 13;
-static const int GHOST_HOUSE_TARGET_ROW = 14;
+static const int   GHOST_HOUSE_COL = 13;
+static const int   GHOST_HOUSE_ROW = 14;
 static const float LANE_SNAP_TOLERANCE = 4.0f;
 static const float TURN_CENTER_TOLERANCE = 0.5f;
-static const float GHOST_DIRECTION_PROBE_DISTANCE = 2.0f;
-static const float PACMAN_FRIGHTENED_DURATION = 10.0f;
+static const float GHOST_PROBE_DISTANCE = 2.0f;
+static const float FRIGHTENED_DURATION = 10.0f;
 static const float COLLISION_RADIUS = GameManager::TileSize * 0.28f;
 
-// Stops the game after printing an error message.
-// text is the message to send to the raylib log.
-static void StopGameWithMessage(const char* text)
+// Crash the game with an error message. Used when a critical file is missing or corrupt.
+static void FatalError(const char* message)
 {
-    TraceLog(LOG_ERROR, "%s", text);
+    TraceLog(LOG_ERROR, "%s", message);
     if (IsWindowReady())
-    {
         CloseWindow();
-    }
-
     std::exit(1);
 }
 
-// Returns true if a tile is part of the inside of the ghost house.
-// column and row are tile coordinates in the map grid.
-static bool IsGhostHouseTileInternal(int column, int row)
+// Returns true if the tile is inside the ghost house interior (not the door
+static bool IsInsideGhostHouse(int column, int row)
 {
-    if (row < 11 || row > 17)
-    {
-        return false;
-    }
-
-    if (column < 9 || column > 18)
-    {
-        return false;
-    }
-
-    return true;
+    return row >= 11 && row <= 17 && column >= 9 && column <= 18;
 }
 
-// Returns the reverse of a direction.
-// direction is the input direction to flip.
-static Vector2D GetOppositeDirection(Vector2D direction)
+// Wraps a column index so it stays within the map (for tunnels)
+static int WrapColumn(int column, int width)
 {
-    return MakeVector2D(-direction.x, -direction.y);
-}
-
-// Returns true if two directions point exactly opposite ways.
-// firstDirection and secondDirection are the two directions to compare.
-static bool AreDirectionsOpposite(Vector2D firstDirection, Vector2D secondDirection)
-{
-    if (firstDirection.x + secondDirection.x != 0.0f)
-    {
-        return false;
-    }
-
-    if (firstDirection.y + secondDirection.y != 0.0f)
-    {
-        return false;
-    }
-
-    return true;
-}
-
-// Converts a raylib key code into one of the four movement directions.
-// key is the key code returned by raylib.
-static Vector2D DirectionFromKey(int key)
-{
-    if (key == KEY_UP)
-    {
-        return MakeVector2D(0.0f, -1.0f);
-    }
-
-    if (key == KEY_DOWN)
-    {
-        return MakeVector2D(0.0f, 1.0f);
-    }
-
-    if (key == KEY_LEFT)
-    {
-        return MakeVector2D(-1.0f, 0.0f);
-    }
-
-    if (key == KEY_RIGHT)
-    {
-        return MakeVector2D(1.0f, 0.0f);
-    }
-
-    return MakeVector2D(0.0f, 0.0f);
-}
-
-// Wraps a map column to the left or right tunnel edge.
-// column is the column to fix, and width is the map width.
-static int WrapColumnIndex(int column, int width)
-{
-    if (column < 0)
-    {
-        return width - 1;
-    }
-
-    if (column >= width)
-    {
-        return 0;
-    }
-
+    if (column < 0)     return width - 1;
+    if (column >= width) return 0;
     return column;
 }
 
-// Reads the newest pressed arrow key direction, if any.
-// direction points to the output direction.
-static bool TryReadPressedArrowDirection(Vector2D* direction)
+// Maps an arrow key to a movement direction.
+static Vector2D KeyToDirection(int key)
 {
-    bool foundDirection = false;
-
-    for (int key = GetKeyPressed(); key != 0; key = GetKeyPressed())
-    {
-        Vector2D candidate = DirectionFromKey(key);
-        if (!IsZeroVector(candidate))
-        {
-            *direction = candidate;
-            foundDirection = true;
-        }
-    }
-
-    return foundDirection;
+    if (key == KEY_UP)    return MakeVector2D(0.0f, -1.0f);
+    if (key == KEY_DOWN)  return MakeVector2D(0.0f,  1.0f);
+    if (key == KEY_LEFT)  return MakeVector2D(-1.0f, 0.0f);
+    if (key == KEY_RIGHT) return MakeVector2D(1.0f,  0.0f);
+    return MakeVector2D(0.0f, 0.0f);
 }
 
-// Reads one held arrow key direction, if any.
-// direction points to the output direction.
-static bool TryReadHeldArrowDirection(Vector2D* direction)
+static Vector2 ToVector2(Vector2D v)
 {
-    if (IsKeyDown(KEY_UP))
-    {
-        *direction = MakeVector2D(0.0f, -1.0f);
-        return true;
-    }
-
-    if (IsKeyDown(KEY_DOWN))
-    {
-        *direction = MakeVector2D(0.0f, 1.0f);
-        return true;
-    }
-
-    if (IsKeyDown(KEY_LEFT))
-    {
-        *direction = MakeVector2D(-1.0f, 0.0f);
-        return true;
-    }
-
-    if (IsKeyDown(KEY_RIGHT))
-    {
-        *direction = MakeVector2D(1.0f, 0.0f);
-        return true;
-    }
-
-    return false;
+    return Vector2{v.x, v.y};
 }
 
-// Returns the score multiplier for the ghost combo count.
-// combo is how many ghosts Pac-Man has eaten in one frightened period.
-static int GetGhostComboMultiplier(int combo)
+static Vector2D ToVector2D(Vector2 v)
 {
-    if (combo == 2)
-    {
-        return 2;
-    }
+    return MakeVector2D(v.x, v.y);
+}
 
-    if (combo == 3)
-    {
-        return 4;
-    }
-
-    if (combo >= 4)
-    {
-        return 8;
-    }
-
+// Eating more ghosts in one frightened period multiplies the score.
+static int GhostComboMultiplier(int combo)
+{
+    if (combo == 2) return 2;
+    if (combo == 3) return 4;
+    if (combo >= 4) return 8;
     return 1;
 }
 
-// Returns the correct map path for root and Deployment launches.
-static std::string ResolveMapPath()
+static std::string FindMapPath()
 {
-    if (FileExists("assets/map.txt"))
-    {
-        return "assets/map.txt";
-    }
-
-    if (FileExists("..\\assets\\map.txt"))
-    {
-        return "..\\assets\\map.txt";
-    }
-
+    if (FileExists("assets/map.txt"))       return "assets/map.txt";
+    if (FileExists("..\\assets\\map.txt"))  return "..\\assets\\map.txt";
     return "assets/map.txt";
 }
 
-// Creates the gameplay manager and fills it with default values.
-// owner is the Game object that owns this manager.
-GameManager::GameManager(Game& owner)
-    : game(owner)
+// ---------------------- Constructor / Destructor ----------------------
+
+GameManager::GameManager(Game& owner) : game(owner)
 {
-    gameObjects.clear();
-    mapRows.clear();
-    ghosts.clear();
-    pacMan = NULL;
-    pacManTexture = NULL;
-    coinTexture = NULL;
-    bigCoinTexture = NULL;
-    inkyTexture = NULL;
-    pinkyTexture = NULL;
-    clydeTexture = NULL;
+    pacMan           = NULL;
+    pacManTexture    = NULL;
+    coinTexture      = NULL;
+    bigCoinTexture   = NULL;
+    inkyTexture      = NULL;
+    pinkyTexture     = NULL;
+    clydeTexture     = NULL;
     frightenedTexture = NULL;
-    wallTexture = NULL;
-    frightenedTimer = 0.0f;
+    wallTexture      = NULL;
+    frightenedTimer  = 0.0f;
+    currentLives     = 3;
 }
 
-// Cleans up every gameplay object owned by the manager.
 GameManager::~GameManager()
 {
     ClearObjects();
 }
 
-// Loads the map file from disk.
+// ---------------------- Map loading ----------------------
+
 void GameManager::LoadMap()
 {
-    std::string mapPath = ResolveMapPath();
-    std::ifstream file(mapPath.c_str());
+    std::string path = FindMapPath();
+    std::ifstream file(path.c_str());
     if (!file.is_open())
-    {
-        std::string message = "Failed to open map file: " + mapPath;
-        StopGameWithMessage(message.c_str());
-    }
+        FatalError(("Failed to open map file: " + path).c_str());
 
     mapRows.clear();
-    ReadMapRows(file);
-    ValidateMapSize();
-}
-
-// Reads every line from the map file.
-// file is the already opened input file.
-void GameManager::ReadMapRows(std::ifstream& file)
-{
     std::string line;
     while (std::getline(file, line))
     {
-        if (!line.empty() && line[line.size() - 1] == '\r')
-        {
-            line.erase(line.size() - 1, 1);
-        }
-
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
         mapRows.push_back(line);
     }
+
+    if ((int)mapRows.size() != 31)
+        FatalError("Map must be exactly 31 rows.");
+    for (int row = 0; row < (int)mapRows.size(); row++)
+        if ((int)mapRows[row].size() != 28)
+            FatalError("Map must be exactly 28 columns wide.");
 }
 
-// Checks that the loaded map is the expected 28 by 31 size.
-void GameManager::ValidateMapSize() const
+// ---------------------- Object management ----------------------
+
+void GameManager::ClearObjects()
 {
-    if ((int)mapRows.size() != DEFAULT_MAP_HEIGHT)
+    for (int i = 0; i < (int)gameObjects.size(); i++)
+        delete gameObjects[i];
+    gameObjects.clear();
+    ghosts.clear();
+
+    if (pacMan != NULL)
     {
-        StopGameWithMessage("Map must be exactly 31 rows.");
+        delete pacMan;
+        pacMan = NULL;
+    }
+}
+
+void GameManager::AddObject(GameObject* object)
+{
+    gameObjects.push_back(object);
+}
+
+void GameManager::RemoveObject(GameObject* object)
+{
+    if (object == NULL)
+        return;
+
+    // Also remove from the ghost list if it is a ghost.
+    if (object->GetTag() == TAG_GHOST)
+    {
+        for (int i = 0; i < (int)ghosts.size(); i++)
+        {
+            if (ghosts[i] == (Ghost*)object)
+            {
+                ghosts.erase(ghosts.begin() + i);
+                break;
+            }
+        }
     }
 
-    for (int row = 0; row < (int)mapRows.size(); row++)
+    for (int i = 0; i < (int)gameObjects.size(); i++)
     {
-        if ((int)mapRows[row].size() != DEFAULT_MAP_WIDTH)
+        if (gameObjects[i] == object)
         {
-            StopGameWithMessage("Map must be exactly 28 columns wide.");
+            delete gameObjects[i];
+            gameObjects.erase(gameObjects.begin() + i);
+            return;
         }
     }
 }
 
-// Deletes every gameplay object and clears the object lists.
-void GameManager::ClearObjects()
-{
-    for (int index = 0; index < (int)gameObjects.size(); index++)
-    {
-        delete gameObjects[index];
-    }
+// ---------------------- Level setup ----------------------
 
-    gameObjects.clear();
-    ghosts.clear();
-    pacMan = NULL;
-}
-
-// Creates pellets by reading the map grid.
+// Reads the map grid and places a pellet on every '.' and '&' tile
 void GameManager::SpawnPelletsFromMap()
 {
     for (int row = 0; row < GetMapHeight(); row++)
     {
-        SpawnPelletsInRow(row);
+        for (int col = 0; col < GetMapWidth(); col++)
+        {
+            char cell = mapRows[row][col];
+            if (cell == '.')
+            {
+                Vector2D pos = TileToWorldCenter(col, row);
+                AddObject(new Pellet(this, pos, false, coinTexture));
+            }
+            else if (cell == '&')
+            {
+                Vector2D pos = TileToWorldCenter(col, row);
+                AddObject(new Pellet(this, pos, true, bigCoinTexture));
+            }
+        }
     }
 }
 
-// Creates pellets for one map row.
-// row is the map row to inspect.
-void GameManager::SpawnPelletsInRow(int row)
-{
-    for (int column = 0; column < GetMapWidth(); column++)
-    {
-        char cell = mapRows[row][column];
-        CreatePelletFromCell(column, row, cell);
-    }
-}
-
-// Creates a pellet if the map cell represents one.
-// column and row are the tile location, and cell is the map character.
-void GameManager::CreatePelletFromCell(int column, int row, char cell)
-{
-    if (cell == '.')
-    {
-        Vector2D position = TileToWorldCenter(column, row);
-        Pellet* pellet = new Pellet(this, position, false, coinTexture);
-        AddObject(pellet);
-    }
-
-    if (cell == '&')
-    {
-        Vector2D position = TileToWorldCenter(column, row);
-        Pellet* pellet = new Pellet(this, position, true, bigCoinTexture);
-        AddObject(pellet);
-    }
-}
-
-// Creates Pac-Man and the three ghosts.
+// Creates Pac-Man and all three ghosts at their starting tiles.
 void GameManager::SpawnActors()
 {
-    SpawnPacMan();
-    SpawnGhosts();
+    // Pac-Man starts near the bottom-center of the maze.
+    Vector2D pacStart = TileToWorldCenter(13, 23);
+    if (pacMan != NULL)
+        delete pacMan;
+    pacMan = new PacMan(ToVector2(pacStart), *pacManTexture, currentLives);
+
+    // Each ghost has a type, a spawn tile, a patrol corner tile, and its own texture.
+    struct GhostSpawn { GhostType type; int sc, sr, tc, tr; Texture2D** tex; };
+    GhostSpawn spawns[] = {
+        { GHOST_INKY,  11, 14, 24,  5, &inkyTexture  },
+        { GHOST_PINKY, 13, 14,  3,  5, &pinkyTexture  },
+        { GHOST_CLYDE, 15, 14,  3, 27, &clydeTexture  }
+    };
+
+    for (int i = 0; i < 3; i++)
+    {
+        GhostSpawn& s = spawns[i];
+        Vector2D spawn  = TileToWorldCenter(s.sc, s.sr);
+        Vector2D patrol = TileToWorldCenter(s.tc, s.tr);
+        Ghost* ghost = new Ghost(this, s.type, spawn, patrol, *s.tex, frightenedTexture);
+        AddObject(ghost);
+        ghosts.push_back(ghost);
+    }
 }
 
-// Creates the Pac-Man object at its starting tile.
-void GameManager::SpawnPacMan()
+void GameManager::ResetLevel()
 {
-    Vector2D startPosition = TileToWorldCenter(13, 23);
-    pacMan = new PacMan(this, startPosition, pacManTexture);
-    AddObject(pacMan);
+    ClearObjects();
+    frightenedTimer = 0.0f;
+    currentLives = 3;
+    LoadMap();
+    SpawnPelletsFromMap();
+    SpawnActors();
 }
 
-// Creates all three ghost objects.
-void GameManager::SpawnGhosts()
+void GameManager::ResetActors()
 {
-    CreateGhost(GHOST_INKY, 11, 14, 24, 5, inkyTexture);
-    CreateGhost(GHOST_PINKY, 13, 14, 3, 5, pinkyTexture);
-    CreateGhost(GHOST_CLYDE, 15, 14, 3, 27, clydeTexture);
+    frightenedTimer = 0.0f;
+
+    if (pacMan != NULL)
+    {
+        delete pacMan;
+        pacMan = NULL;
+    }
+
+    Vector2D pacStart = TileToWorldCenter(13, 23);
+    pacMan = new PacMan(ToVector2(pacStart), *pacManTexture, currentLives);
+
+    for (int i = 0; i < (int)ghosts.size(); i++)
+        ghosts[i]->ResetPosition();
 }
 
-// Creates one ghost and adds it to the object lists.
-// ghostType chooses the AI, spawnColumn/spawnRow choose the start tile,
-// targetColumn/targetRow choose the patrol target, and chaseTexture is the normal sprite.
-void GameManager::CreateGhost(GhostType ghostType,
-                              int spawnColumn,
-                              int spawnRow,
-                              int targetColumn,
-                              int targetRow,
-                              Texture2D* chaseTexture)
-{
-    Vector2D startPosition = TileToWorldCenter(spawnColumn, spawnRow);
-    Vector2D patrolTarget = TileToWorldCenter(targetColumn, targetRow);
-    Ghost* ghost = new Ghost(this, ghostType, startPosition, patrolTarget,
-                             chaseTexture, frightenedTexture);
-    AddObject(ghost);
-    ghosts.push_back(ghost);
-}
+// ---------------------- Input ----------------------
 
-// Reads player input and sends the chosen direction to Pac-Man.
 void GameManager::HandleInput()
 {
-    if (pacMan == NULL)
-    {
-        return;
-    }
-
-    Vector2D inputDirection = MakeVector2D(0.0f, 0.0f);
-    bool hasInput = TryGetPacManInput(&inputDirection);
-    if (!hasInput)
-    {
-        return;
-    }
-
-    ApplyPacManInput(inputDirection);
+    // Input for Pac-Man is handled by PacMan::Update(); no extra pathfinding required here.
 }
 
-// Reads the best current Pac-Man input direction.
-// inputDirection points to the output direction.
-bool GameManager::TryGetPacManInput(Vector2D* inputDirection) const
-{
-    bool hasPressedDirection = TryReadPressedArrowDirection(inputDirection);
-    if (hasPressedDirection)
-    {
-        return true;
-    }
+// ---------------------- Collisions ----------------------
 
-    Vector2D currentDirection = pacMan->GetDirection();
-    if (!IsZeroVector(currentDirection))
-    {
-        return false;
-    }
-
-    return TryReadHeldArrowDirection(inputDirection);
-}
-
-// Applies one input direction to Pac-Man.
-// inputDirection is the direction requested by the player.
-void GameManager::ApplyPacManInput(Vector2D inputDirection)
-{
-    Vector2D currentDirection = pacMan->GetDirection();
-    if (AreDirectionsOpposite(currentDirection, inputDirection))
-    {
-        pacMan->QueueDirection(inputDirection);
-        return;
-    }
-
-    Vector2D nextTurnCenter = GetNextTurnCenter(pacMan->GetPosition(), currentDirection);
-    if (CanEnterNeighborTile(nextTurnCenter, inputDirection, false, false))
-    {
-        pacMan->QueueDirection(inputDirection);
-    }
-}
-
-// Handles Pac-Man touching pellets.
 void GameManager::HandlePelletCollisions()
 {
     if (pacMan == NULL)
-    {
         return;
-    }
 
-    Vector2D pacManPosition = pacMan->GetPosition();
-    for (int index = 0; index < (int)gameObjects.size(); index++)
+    Vector2D pacPos = ToVector2D(pacMan->GetPosition());
+    for (int i = 0; i < (int)gameObjects.size(); i++)
     {
-        GameObject* object = gameObjects[index];
-        if (!IsPelletObject(object))
-        {
+        GameObject* obj = gameObjects[i];
+        if (!obj->IsActive() || obj->GetTag() != TAG_PELLET)
             continue;
-        }
 
-        Pellet* pellet = (Pellet*)object;
-        if (!IsSameTile(pacManPosition, pellet->GetPosition()))
-        {
+        Pellet* pellet = (Pellet*)obj;
+        if (!IsSameTile(pacPos, pellet->GetPosition()))
             continue;
-        }
 
         pellet->SetActive(false);
         if (pellet->IsSuper())
@@ -473,430 +290,189 @@ void GameManager::HandlePelletCollisions()
     }
 }
 
-// Handles Pac-Man touching ghosts.
 void GameManager::HandleGhostCollisions()
 {
     if (pacMan == NULL)
-    {
         return;
-    }
 
-    Vector2D pacManPosition = pacMan->GetPosition();
-    for (int index = 0; index < (int)ghosts.size(); index++)
+    Vector2D pacPos = ToVector2D(pacMan->GetPosition());
+    for (int i = 0; i < (int)ghosts.size(); i++)
     {
-        Ghost* ghost = ghosts[index];
-        if (!ghost->IsActive())
-        {
+        Ghost* ghost = ghosts[i];
+        if (!ghost->IsActive() || !IsSameTile(pacPos, ghost->GetPosition()))
             continue;
-        }
-
-        if (!IsSameTile(pacManPosition, ghost->GetPosition()))
-        {
-            continue;
-        }
 
         if (ghost->IsFrightened())
         {
             ghost->SetEaten();
-            pacMan->IncreaseGhostCombo();
-            int combo = pacMan->GetGhostCombo();
-            int points = 200 * GetGhostComboMultiplier(combo);
-            pacMan->AddScore(points);
+            pacMan->AddScore(200);
             continue;
         }
 
         if (!ghost->IsEaten())
         {
-            pacMan->LoseLife();
-            pacMan->ResetGhostCombo();
-            if (pacMan->GetLives() <= 0)
-            {
-                game.SetState(Game::GameOverState);
-            }
+            currentLives--;
+            if (currentLives <= 0)
+                game.SetState(Game::GameOver);
             else
-            {
                 ResetActors();
-            }
-
             return;
         }
     }
 }
 
-// Starts frightened mode for all ghosts.
+// ---------------------- Frightened mode ----------------------
+
 void GameManager::ActivateFrightenedMode()
 {
-    if (pacMan != NULL)
-    {
-        pacMan->ResetGhostCombo();
-    }
-
-    frightenedTimer = PACMAN_FRIGHTENED_DURATION;
-    for (int index = 0; index < (int)ghosts.size(); index++)
-    {
-        ghosts[index]->SetFrightened();
-    }
+    frightenedTimer = FRIGHTENED_DURATION;
+    for (int i = 0; i < (int)ghosts.size(); i++)
+        ghosts[i]->SetFrightened();
 }
 
-// Counts down frightened mode and ends it when time runs out.
 void GameManager::UpdateFrightenedMode()
 {
     if (frightenedTimer <= 0.0f)
-    {
         return;
-    }
 
-    frightenedTimer = frightenedTimer - GetDeltaTime();
+    frightenedTimer -= GetDeltaTime();
     if (frightenedTimer <= 0.0f)
     {
-        EndFrightenedMode();
+        frightenedTimer = 0.0f;
+        for (int i = 0; i < (int)ghosts.size(); i++)
+            if (ghosts[i]->IsFrightened())
+                ghosts[i]->SetChase();
     }
 }
 
-// Returns every frightened ghost back to chase mode.
-void GameManager::EndFrightenedMode()
-{
-    frightenedTimer = 0.0f;
-    if (pacMan != NULL)
-    {
-        pacMan->ResetGhostCombo();
-    }
+// ---------------------- Update / Render ----------------------
 
-    for (int index = 0; index < (int)ghosts.size(); index++)
-    {
-        Ghost* ghost = ghosts[index];
-        if (ghost->IsFrightened())
-        {
-            ghost->SetChase();
-        }
-    }
-}
-
-// Updates every active gameplay object.
-void GameManager::UpdateObjects()
-{
-    for (int index = 0; index < (int)gameObjects.size(); index++)
-    {
-        GameObject* object = gameObjects[index];
-        if (object->IsActive())
-        {
-            object->Update();
-        }
-    }
-}
-
-// Draws every active gameplay object.
-void GameManager::RenderObjects() const
-{
-    for (int index = 0; index < (int)gameObjects.size(); index++)
-    {
-        GameObject* object = gameObjects[index];
-        if (object->IsActive())
-        {
-            object->Render();
-        }
-    }
-}
-
-// Draws the maze walls from the map grid.
-void GameManager::DrawMaze() const
-{
-    for (int row = 0; row < GetMapHeight(); row++)
-    {
-        DrawMazeRow(row);
-    }
-}
-
-// Draws all wall tiles in one map row.
-// row is the row to inspect.
-void GameManager::DrawMazeRow(int row) const
-{
-    for (int column = 0; column < GetMapWidth(); column++)
-    {
-        if (mapRows[row][column] == '#')
-        {
-            DrawWallTile(column, row);
-        }
-    }
-}
-
-// Draws one wall tile using the wall texture.
-// column and row are the tile coordinates.
-void GameManager::DrawWallTile(int column, int row) const
-{
-    Rectangle source;
-    source.x = 0.0f;
-    source.y = 0.0f;
-    source.width = 16.0f;
-    source.height = 16.0f;
-
-    Rectangle destination;
-    destination.x = (float)(column * TileSize) + TileSize * 0.5f;
-    destination.y = (float)(HudHeight + row * TileSize) + TileSize * 0.5f;
-    destination.width = (float)TileSize;
-    destination.height = (float)TileSize;
-
-    Vector2 origin;
-    origin.x = TileSize * 0.5f;
-    origin.y = TileSize * 0.5f;
-    DrawTexturePro(*wallTexture, source, destination, origin, 0.0f, WHITE);
-}
-
-// Draws the top HUD area.
-void GameManager::DrawHud() const
-{
-    if (pacMan == NULL)
-    {
-        return;
-    }
-
-    DrawScoreText();
-    DrawLivesText();
-}
-
-// Draws the score text in the HUD.
-void GameManager::DrawScoreText() const
-{
-    const char* scoreText = TextFormat("SCORE: %d", pacMan->GetScore());
-    DrawText(scoreText, 20, 18, 28, RAYWHITE);
-}
-
-// Draws the lives text in the HUD.
-void GameManager::DrawLivesText() const
-{
-    const char* livesText = TextFormat("LIVES: %d", pacMan->GetLives());
-    DrawText(livesText, 260, 18, 28, RAYWHITE);
-}
-
-// Returns true if the object is an active pellet.
-// object is the object to test.
-bool GameManager::IsPelletObject(GameObject* object) const
-{
-    if (!object->IsActive())
-    {
-        return false;
-    }
-
-    if (object->GetTag() != TAG_PELLET)
-    {
-        return false;
-    }
-
-    return true;
-}
-
-// Returns true when two world positions are inside the same map tile.
-// firstPosition and secondPosition are the world positions to compare.
-bool GameManager::IsSameTile(Vector2D firstPosition, Vector2D secondPosition) const
-{
-    Vector2D firstTile = WorldToTile(firstPosition);
-    Vector2D secondTile = WorldToTile(secondPosition);
-    return AreVectorsEqual(firstTile, secondTile);
-}
-
-// Removes one ghost pointer from the ghost list.
-// ghost is the ghost pointer to erase.
-void GameManager::RemoveGhostPointer(Ghost* ghost)
-{
-    for (int index = 0; index < (int)ghosts.size(); index++)
-    {
-        if (ghosts[index] == ghost)
-        {
-            ghosts.erase(ghosts.begin() + index);
-            return;
-        }
-    }
-}
-
-// Adds one object pointer to the main object list.
-// object is the new object to store.
-void GameManager::AddObject(GameObject* object)
-{
-    gameObjects.push_back(object);
-}
-
-// Removes and deletes one object.
-// object is the object pointer to remove.
-void GameManager::RemoveObject(GameObject* object)
-{
-    if (object == NULL)
-    {
-        return;
-    }
-
-    if (object == pacMan)
-    {
-        pacMan = NULL;
-    }
-
-    if (object->GetTag() == TAG_GHOST)
-    {
-        Ghost* ghost = (Ghost*)object;
-        RemoveGhostPointer(ghost);
-    }
-
-    for (int index = 0; index < (int)gameObjects.size(); index++)
-    {
-        if (gameObjects[index] == object)
-        {
-            delete gameObjects[index];
-            gameObjects.erase(gameObjects.begin() + index);
-            return;
-        }
-    }
-}
-
-// Updates one full gameplay frame.
 void GameManager::UpdateGame()
 {
     HandleInput();
     UpdateFrightenedMode();
-    UpdateObjects();
+
+    if (pacMan != NULL)
+    {
+        Vector2 oldPos = pacMan->GetPosition();
+        pacMan->Update();
+        Vector2 newPos = pacMan->GetPosition();
+        Vector2D tile = WorldToTile(ToVector2D(newPos));
+        if (!IsWalkableTile((int)tile.x, (int)tile.y, false, false))
+            pacMan->SetPosition(oldPos);
+    }
+
+    for (int i = 0; i < (int)gameObjects.size(); i++)
+        if (gameObjects[i]->IsActive())
+            gameObjects[i]->Update();
+
     HandlePelletCollisions();
     HandleGhostCollisions();
 
-    if (CountRemainingPellets() == 0 && game.GetState() == Game::PlayingState)
-    {
-        game.SetState(Game::VictoryState);
-    }
+    if (CountRemainingPellets() == 0 && game.GetState() == Game::Playing)
+        game.SetState(Game::Victory);
 }
 
-// Draws one full gameplay frame.
 void GameManager::RenderGame() const
 {
     ClearBackground(BLACK);
     DrawMaze();
-    RenderObjects();
+
+    if (pacMan != NULL)
+        pacMan->Draw();
+
+    for (int i = 0; i < (int)gameObjects.size(); i++)
+        if (gameObjects[i]->IsActive())
+            gameObjects[i]->Render();
+
     DrawHud();
 }
 
-// Clears the old level and builds a fresh one.
-void GameManager::ResetLevel()
+void GameManager::DrawMaze() const
 {
-    ClearObjects();
-    frightenedTimer = 0.0f;
-    LoadMap();
-    SpawnPelletsFromMap();
-    SpawnActors();
-}
-
-// Resets Pac-Man and all ghosts to their spawn positions.
-void GameManager::ResetActors()
-{
-    frightenedTimer = 0.0f;
-    if (pacMan != NULL)
+    Rectangle source = { 0, 0, 16, 16 };
+    for (int row = 0; row < GetMapHeight(); row++)
     {
-        pacMan->ResetPosition();
-        pacMan->ResetGhostCombo();
-    }
+        for (int col = 0; col < GetMapWidth(); col++)
+        {
+            if (mapRows[row][col] != '#')
+                continue;
 
-    for (int index = 0; index < (int)ghosts.size(); index++)
-    {
-        ghosts[index]->ResetPosition();
+            float x = (float)(col * TileSize) + TileSize * 0.5f;
+            float y = (float)(HudHeight + row * TileSize) + TileSize * 0.5f;
+            Rectangle dest = { x, y, (float)TileSize, (float)TileSize };
+            Vector2 origin = { TileSize * 0.5f, TileSize * 0.5f };
+            DrawTexturePro(*wallTexture, source, dest, origin, 0.0f, WHITE);
+        }
     }
 }
 
-// Stores the textures used by gameplay objects and the maze.
-// Each pointer is a texture owned by the main Game object.
-void GameManager::SetTextures(Texture2D* pacTexture,
-                              Texture2D* normalPelletTexture,
-                              Texture2D* superPelletTexture,
-                              Texture2D* greenGhostTexture,
-                              Texture2D* yellowGhostTexture,
-                              Texture2D* orangeGhostTexture,
-                              Texture2D* blueGhostTexture,
-                              Texture2D* mazeTexture)
+void GameManager::DrawHud() const
 {
-    pacManTexture = pacTexture;
-    coinTexture = normalPelletTexture;
-    bigCoinTexture = superPelletTexture;
-    inkyTexture = greenGhostTexture;
-    pinkyTexture = yellowGhostTexture;
-    clydeTexture = orangeGhostTexture;
+    if (pacMan == NULL)
+        return;
+
+    DrawText(TextFormat("SCORE: %d", pacMan->GetScore()), 20,  18, 28, RAYWHITE);
+    DrawText(TextFormat("LIVES: %d", currentLives),  260, 18, 28, RAYWHITE);
+}
+
+// ---------------------- Texture setup ----------------------
+
+void GameManager::SetTextures(
+    Texture2D* pacTexture,
+    Texture2D* normalPelletTexture,
+    Texture2D* superPelletTexture,
+    Texture2D* greenGhostTexture,
+    Texture2D* yellowGhostTexture,
+    Texture2D* orangeGhostTexture,
+    Texture2D* blueGhostTexture,
+    Texture2D* mazeTexture)
+{
+    pacManTexture     = pacTexture;
+    coinTexture       = normalPelletTexture;
+    bigCoinTexture    = superPelletTexture;
+    inkyTexture       = greenGhostTexture;
+    pinkyTexture      = yellowGhostTexture;
+    clydeTexture      = orangeGhostTexture;
     frightenedTexture = blueGhostTexture;
-    wallTexture = mazeTexture;
+    wallTexture       = mazeTexture;
 }
 
-// Returns the frame time from the owning Game object.
-float GameManager::GetDeltaTime() const
-{
-    return game.GetDeltaTime();
-}
+// ---------------------- Getters ----------------------
 
-// Returns the tile size used by the maze.
-int GameManager::GetTileSize() const
-{
-    return TileSize;
-}
+float GameManager::GetDeltaTime() const { return game.GetDeltaTime(); }
 
-// Returns the HUD height above the maze.
-int GameManager::GetHudHeight() const
-{
-    return HudHeight;
-}
-
-// Returns the map width in tiles.
 int GameManager::GetMapWidth() const
 {
-    if (mapRows.empty())
-    {
-        return DEFAULT_MAP_WIDTH;
-    }
-
-    return (int)mapRows[0].size();
+    return mapRows.empty() ? 28 : (int)mapRows[0].size();
 }
 
-// Returns the map height in tiles.
 int GameManager::GetMapHeight() const
 {
-    if (mapRows.empty())
-    {
-        return DEFAULT_MAP_HEIGHT;
-    }
-
-    return (int)mapRows.size();
+    return mapRows.empty() ? 31 : (int)mapRows.size();
 }
 
-// Returns the Pac-Man pointer.
-PacMan* GameManager::GetPacMan() const
-{
-    return pacMan;
-}
+PacMan* GameManager::GetPacMan() const { return pacMan; }
 
-// Returns the ghost house home target in world coordinates.
 Vector2D GameManager::GetGhostHouseTarget() const
 {
-    return TileToWorldCenter(GHOST_HOUSE_TARGET_COLUMN, GHOST_HOUSE_TARGET_ROW);
+    return TileToWorldCenter(GHOST_HOUSE_COL, GHOST_HOUSE_ROW);
 }
 
-// Returns true if the tile is inside Inky's top-right quadrant.
-// column and row are map tile coordinates.
 bool GameManager::IsTileInsideInkyQuadrant(int column, int row) const
 {
-    if (column < GetMapWidth() / 2)
-    {
-        return false;
-    }
-
-    if (row >= GetMapHeight() / 2)
-    {
-        return false;
-    }
-
-    return true;
+    return column >= GetMapWidth() / 2 && row < GetMapHeight() / 2;
 }
 
-// Converts a world position into map tile coordinates.
-// position is the world position to convert.
+// ---------------------- Coordinate helpers ----------------------
+
 Vector2D GameManager::WorldToTile(Vector2D position) const
 {
-    float column = std::floor(position.x / (float)TileSize);
+    float col = std::floor(position.x / (float)TileSize);
     float row = std::floor((position.y - (float)HudHeight) / (float)TileSize);
-    return MakeVector2D(column, row);
+    return MakeVector2D(col, row);
 }
 
-// Converts tile coordinates into the center of that tile in world space.
-// column and row are the tile coordinates.
 Vector2D GameManager::TileToWorldCenter(int column, int row) const
 {
     float x = (float)(column * TileSize) + TileSize * 0.5f;
@@ -904,335 +480,181 @@ Vector2D GameManager::TileToWorldCenter(int column, int row) const
     return MakeVector2D(x, y);
 }
 
-// Returns the next tile center where a moving object can make a turn.
-// worldPosition is the current center point, and movementDirection is the current direction.
-Vector2D GameManager::GetNextTurnCenter(Vector2D worldPosition, Vector2D movementDirection) const
+// Returns the tile center where the moving object will be able to turn next
+Vector2D GameManager::GetNextTurnCenter(Vector2D worldPos, Vector2D dir) const
 {
-    Vector2D currentTile = WorldToTile(worldPosition);
-    int column = (int)currentTile.x;
-    int row = (int)currentTile.y;
-    Vector2D currentCenter = TileToWorldCenter(column, row);
+    Vector2D tile = WorldToTile(worldPos);
+    int col = (int)tile.x;
+    int row = (int)tile.y;
+    Vector2D center = TileToWorldCenter(col, row);
 
-    if (movementDirection.x > 0.0f && worldPosition.x > currentCenter.x + TURN_CENTER_TOLERANCE)
-    {
-        column = column + 1;
-    }
-    else if (movementDirection.x < 0.0f && worldPosition.x < currentCenter.x - TURN_CENTER_TOLERANCE)
-    {
-        column = column - 1;
-    }
-    else if (movementDirection.y > 0.0f && worldPosition.y > currentCenter.y + TURN_CENTER_TOLERANCE)
-    {
-        row = row + 1;
-    }
-    else if (movementDirection.y < 0.0f && worldPosition.y < currentCenter.y - TURN_CENTER_TOLERANCE)
-    {
-        row = row - 1;
-    }
+    if (dir.x > 0.0f && worldPos.x > center.x + TURN_CENTER_TOLERANCE) col++;
+    else if (dir.x < 0.0f && worldPos.x < center.x - TURN_CENTER_TOLERANCE) col--;
+    else if (dir.y > 0.0f && worldPos.y > center.y + TURN_CENTER_TOLERANCE) row++;
+    else if (dir.y < 0.0f && worldPos.y < center.y - TURN_CENTER_TOLERANCE) row--;
 
-    column = WrapColumnIndex(column, GetMapWidth());
-    return TileToWorldCenter(column, row);
+    col = WrapColumn(col, GetMapWidth());
+    return TileToWorldCenter(col, row);
 }
 
-// Returns true if the neighboring tile in one direction is walkable.
-// worldPosition is the current world position, direction is the requested move,
-// and the two booleans control ghost house rules.
-bool GameManager::CanEnterNeighborTile(Vector2D worldPosition,
-                                       Vector2D direction,
-                                       bool ghostCanUseDoor,
-                                       bool ghostCanUseHouse) const
+bool GameManager::CanEnterNeighborTile(Vector2D worldPos, Vector2D dir, bool useDoor, bool useHouse) const
 {
-    if (IsZeroVector(direction))
-    {
+    if (IsZeroVector(dir))
         return false;
-    }
 
-    Vector2D tile = WorldToTile(worldPosition);
-    int column = (int)tile.x + (int)direction.x;
-    int row = (int)tile.y + (int)direction.y;
-    column = WrapColumnIndex(column, GetMapWidth());
-    return IsWalkableTile(column, row, ghostCanUseDoor, ghostCanUseHouse);
+    Vector2D tile = WorldToTile(worldPos);
+    int col = WrapColumn((int)tile.x + (int)dir.x, GetMapWidth());
+    int row = (int)tile.y + (int)dir.y;
+    return IsWalkableTile(col, row, useDoor, useHouse);
 }
 
-// Snaps an object toward the center of its current lane.
-// worldPosition is the position to adjust, and direction is the current movement direction.
-void GameManager::AlignToTileCenter(Vector2D& worldPosition, Vector2D direction) const
+// Snaps the position to the center of its lane perpendicular to the movement direction
+void GameManager::AlignToTileCenter(Vector2D& worldPos, Vector2D dir) const
 {
-    Vector2D tile = WorldToTile(worldPosition);
+    Vector2D tile = WorldToTile(worldPos);
     Vector2D center = TileToWorldCenter((int)tile.x, (int)tile.y);
-    bool nearCenterX = std::fabs(center.x - worldPosition.x) <= LANE_SNAP_TOLERANCE;
-    bool nearCenterY = std::fabs(center.y - worldPosition.y) <= LANE_SNAP_TOLERANCE;
 
-    if (direction.x != 0.0f && nearCenterY)
-    {
-        worldPosition.y = center.y;
-    }
-    else if (direction.y != 0.0f && nearCenterX)
-    {
-        worldPosition.x = center.x;
-    }
-    else if (IsZeroVector(direction))
-    {
-        if (nearCenterX)
-        {
-            worldPosition.x = center.x;
-        }
+    bool nearX = std::fabs(center.x - worldPos.x) <= LANE_SNAP_TOLERANCE;
+    bool nearY = std::fabs(center.y - worldPos.y) <= LANE_SNAP_TOLERANCE;
 
-        if (nearCenterY)
-        {
-            worldPosition.y = center.y;
-        }
+    if (dir.x != 0.0f && nearY) worldPos.y = center.y;
+    else if (dir.y != 0.0f && nearX) worldPos.x = center.x;
+    else if (IsZeroVector(dir))
+    {
+        if (nearX) worldPos.x = center.x;
+        if (nearY) worldPos.y = center.y;
     }
 }
 
-// Returns true if a world position is near the center of its tile.
-// worldPosition is the point to test, and tolerance is the allowed distance from center.
-bool GameManager::IsNearTileCenter(Vector2D worldPosition, float tolerance) const
+bool GameManager::IsNearTileCenter(Vector2D worldPos, float tolerance) const
 {
-    Vector2D tile = WorldToTile(worldPosition);
+    Vector2D tile   = WorldToTile(worldPos);
     Vector2D center = TileToWorldCenter((int)tile.x, (int)tile.y);
-    if (std::fabs(center.x - worldPosition.x) > tolerance)
-    {
-        return false;
-    }
-
-    if (std::fabs(center.y - worldPosition.y) > tolerance)
-    {
-        return false;
-    }
-
-    return true;
+    return std::fabs(center.x - worldPos.x) <= tolerance &&
+           std::fabs(center.y - worldPos.y) <= tolerance;
 }
 
-// Wraps a world position through the left and right tunnel edges.
-// worldPosition is the position to adjust.
-void GameManager::WrapPosition(Vector2D& worldPosition) const
+// Wraps a world position through the left/right tunnel exits.
+void GameManager::WrapPosition(Vector2D& worldPos) const
 {
-    float leftExit = -TileSize * 0.5f;
-    float rightExit = (float)(GetMapWidth() * TileSize) - TileSize * 0.5f;
-    float firstCenter = TileSize * 0.5f;
-    float lastCenter = (float)(GetMapWidth() * TileSize) - TileSize * 0.5f;
+    float leftExit   = -TileSize * 0.5f;
+    float rightExit  = (float)(GetMapWidth() * TileSize) - TileSize * 0.5f;
+    float leftCenter = TileSize * 0.5f;
+    float rightCenter = (float)(GetMapWidth() * TileSize) - TileSize * 0.5f;
 
-    if (worldPosition.x < leftExit)
-    {
-        worldPosition.x = lastCenter;
-    }
-    else if (worldPosition.x > rightExit)
-    {
-        worldPosition.x = firstCenter;
-    }
+    if (worldPos.x < leftExit) worldPos.x = rightCenter;
+    else if (worldPos.x > rightExit) worldPos.x = leftCenter;
 }
 
-// Returns a moved world position after stepping in one direction.
-// position is the start, direction is the movement direction, and distance is the step length.
-Vector2D GameManager::GetMovedPosition(Vector2D position, Vector2D direction, float distance) const
+// ---------------------- Movement ----------------------
+
+bool GameManager::IsWalkableTile(int column, int row, bool useDoor, bool useHouse) const
 {
-    Vector2D candidatePosition = position;
-    candidatePosition.x = candidatePosition.x + direction.x * distance;
-    candidatePosition.y = candidatePosition.y + direction.y * distance;
-    WrapPosition(candidatePosition);
-    return candidatePosition;
-}
-
-// Returns true if the object collision area is fully on walkable tiles.
-// candidatePosition is the moved center point, and the two booleans control ghost house rules.
-bool GameManager::IsPositionAreaWalkable(Vector2D candidatePosition,
-                                         bool ghostCanUseDoor,
-                                         bool ghostCanUseHouse) const
-{
-    int leftTile = (int)std::floor((candidatePosition.x - COLLISION_RADIUS) / (float)TileSize);
-    int rightTile = (int)std::floor((candidatePosition.x + COLLISION_RADIUS) / (float)TileSize);
-    int topTile = (int)std::floor((candidatePosition.y - (float)HudHeight - COLLISION_RADIUS) / (float)TileSize);
-    int bottomTile = (int)std::floor((candidatePosition.y - (float)HudHeight + COLLISION_RADIUS) / (float)TileSize);
-
-    for (int row = topTile; row <= bottomTile; row++)
-    {
-        for (int column = leftTile; column <= rightTile; column++)
-        {
-            int wrappedColumn = WrapColumnIndex(column, GetMapWidth());
-            if (!IsWalkableTile(wrappedColumn, row, ghostCanUseDoor, ghostCanUseHouse))
-            {
-                return false;
-            }
-        }
-    }
-
-    return true;
-}
-
-// Returns true if an object can move a distance in one direction.
-// position is the current center point, direction is the movement direction,
-// distance is the move length, and the booleans control ghost house rules.
-bool GameManager::CanMove(Vector2D position,
-                          Vector2D direction,
-                          float distance,
-                          bool ghostCanUseDoor,
-                          bool ghostCanUseHouse) const
-{
-    if (IsZeroVector(direction))
-    {
-        return false;
-    }
-
-    Vector2D candidatePosition = GetMovedPosition(position, direction, distance);
-    return IsPositionAreaWalkable(candidatePosition, ghostCanUseDoor, ghostCanUseHouse);
-}
-
-// Returns true if a tile is allowed for the current object.
-// column and row are tile coordinates, and the booleans control ghost house rules.
-bool GameManager::IsWalkableTile(int column, int row, bool ghostCanUseDoor, bool ghostCanUseHouse) const
-{
-    if (row < 0 || row >= GetMapHeight())
-    {
-        return false;
-    }
-
-    if (column < 0 || column >= GetMapWidth())
-    {
-        return false;
-    }
+    if (row < 0 || row >= GetMapHeight()) return false;
+    if (column < 0 || column >= GetMapWidth()) return false;
 
     char cell = mapRows[row][column];
-    if (cell == '#')
-    {
+    if (cell == '#') return false;
+    if (cell == '-') return useDoor;
+    if (cell == ' ' && IsInsideGhostHouse(column, row)) return useHouse;
+    return true;
+}
+
+bool GameManager::IsSameTile(Vector2D a, Vector2D b) const
+{
+    return AreVectorsEqual(WorldToTile(a), WorldToTile(b));
+}
+
+// Returns true if moving from pos in dir by distance stays on walkable tiles.
+bool GameManager::CanMove(Vector2D pos, Vector2D dir, float distance, bool useDoor, bool useHouse) const
+{
+    if (IsZeroVector(dir))
         return false;
-    }
 
-    if (cell == '-')
-    {
-        return ghostCanUseDoor;
-    }
+    // Move the position and check all tiles touched by the collision radius
+    Vector2D moved = pos;
+    moved.x += dir.x * distance;
+    moved.y += dir.y * distance;
+    WrapPosition(moved);
 
-    if (cell == ' ' && IsGhostHouseTileInternal(column, row))
-    {
-        return ghostCanUseHouse;
-    }
+    float r    = COLLISION_RADIUS;
+    int left   = (int)std::floor((moved.x - r) / TileSize);
+    int right  = (int)std::floor((moved.x + r) / TileSize);
+    int top    = (int)std::floor((moved.y - HudHeight - r) / TileSize);
+    int bottom = (int)std::floor((moved.y - HudHeight + r) / TileSize);
+
+    for (int row = top; row <= bottom; row++)
+        for (int col = left; col <= right; col++)
+            if (!IsWalkableTile(WrapColumn(col, GetMapWidth()), row, useDoor, useHouse))
+                return false;
 
     return true;
 }
 
-// Counts how many active pellets remain.
 int GameManager::CountRemainingPellets() const
 {
     int count = 0;
-    for (int index = 0; index < (int)gameObjects.size(); index++)
-    {
-        GameObject* object = gameObjects[index];
-        if (IsPelletObject(object))
-        {
-            count = count + 1;
-        }
-    }
-
+    for (int i = 0; i < (int)gameObjects.size(); i++)
+        if (gameObjects[i]->IsActive() && gameObjects[i]->GetTag() == TAG_PELLET)
+            count++;
     return count;
 }
 
-// Collects every valid movement direction for one ghost.
-// ghost is the ghost to test, allowReverse controls reverse moves,
-// and validDirections receives the allowed results.
-void GameManager::CollectValidGhostDirections(const Ghost* ghost,
-                                              bool allowReverse,
-                                              std::vector<Vector2D>& validDirections) const
+// ---------------------- Ghost direction logic ----------------------
+
+// Picks the next direction for a ghost. In frightened mode the choice is random;
+// otherwise it picks whichever valid direction gets closest to the target tile
+Vector2D GameManager::ChooseGhostDirection(
+    const Ghost* ghost,
+    Vector2D target,
+    bool randomize,
+    bool allowReverse) const
 {
-    Vector2D up = MakeVector2D(0.0f, -1.0f);
-    Vector2D left = MakeVector2D(-1.0f, 0.0f);
-    Vector2D down = MakeVector2D(0.0f, 1.0f);
-    Vector2D right = MakeVector2D(1.0f, 0.0f);
-    Vector2D reverseDirection = GetOppositeDirection(ghost->GetDirection());
+    Vector2D dirs[4] = {
+        MakeVector2D(0.0f, -1.0f),
+        MakeVector2D(-1.0f, 0.0f),
+        MakeVector2D(0.0f,  1.0f),
+        MakeVector2D(1.0f,  0.0f)
+    };
+    Vector2D reverse = MakeVector2D(-ghost->GetDirection().x, -ghost->GetDirection().y);
+    bool canUseDoor  = ghost->IsEaten();
 
-    TryAddGhostDirection(ghost, up, reverseDirection, allowReverse, validDirections);
-    TryAddGhostDirection(ghost, left, reverseDirection, allowReverse, validDirections);
-    TryAddGhostDirection(ghost, down, reverseDirection, allowReverse, validDirections);
-    TryAddGhostDirection(ghost, right, reverseDirection, allowReverse, validDirections);
-}
-
-// Adds one ghost direction if it is allowed by the map and reverse rules.
-// ghost is the ghost to test, option is the direction to test,
-// reverseDirection is the direct opposite of the current direction,
-// allowReverse controls reverse moves, and validDirections stores accepted directions.
-void GameManager::TryAddGhostDirection(const Ghost* ghost,
-                                       Vector2D option,
-                                       Vector2D reverseDirection,
-                                       bool allowReverse,
-                                       std::vector<Vector2D>& validDirections) const
-{
-    if (!allowReverse && AreVectorsEqual(option, reverseDirection))
+    // Show every direction the ghost is allowed to move in
+    std::vector<Vector2D> valid;
+    for (int i = 0; i < 4; i++)
     {
-        return;
-    }
-
-    bool canUseDoor = ghost->IsEaten();
-    bool canUseHouse = ghost->IsEaten();
-    bool canEnterNextTile = CanEnterNeighborTile(ghost->GetPosition(), option, canUseDoor, canUseHouse);
-    bool canMoveShortDistance = CanMove(ghost->GetPosition(), option, GHOST_DIRECTION_PROBE_DISTANCE,
-                                        canUseDoor, canUseHouse);
-    if (canEnterNextTile && canMoveShortDistance)
-    {
-        validDirections.push_back(option);
-    }
-}
-
-// Returns a random direction from a list of valid directions.
-// validDirections is the list of allowed directions.
-Vector2D GameManager::ChooseRandomDirection(const std::vector<Vector2D>& validDirections) const
-{
-    if ((int)validDirections.size() == 1)
-    {
-        return validDirections[0];
-    }
-
-    int randomIndex = GetRandomValue(0, (int)validDirections.size() - 1);
-    return validDirections[randomIndex];
-}
-
-// Returns the valid direction that gets closest to the target tile.
-// ghost is the moving ghost, validDirections is the list of options,
-// and targetWorldPosition is the world position the ghost wants to approach.
-Vector2D GameManager::ChooseClosestDirection(const Ghost* ghost,
-                                             const std::vector<Vector2D>& validDirections,
-                                             Vector2D targetWorldPosition) const
-{
-    Vector2D targetTile = WorldToTile(targetWorldPosition);
-    Vector2D ghostTile = WorldToTile(ghost->GetPosition());
-    Vector2D bestDirection = validDirections[0];
-    int bestDistance = 999999;
-
-    for (int index = 0; index < (int)validDirections.size(); index++)
-    {
-        Vector2D nextTile = AddVectors(ghostTile, validDirections[index]);
-        int distance = (int)(std::fabs(nextTile.x - targetTile.x) + std::fabs(nextTile.y - targetTile.y));
-        if (distance < bestDistance)
+        if (!allowReverse && AreVectorsEqual(dirs[i], reverse))
+            continue;
+        if (CanEnterNeighborTile(ghost->GetPosition(), dirs[i], canUseDoor, canUseDoor) &&
+            CanMove(ghost->GetPosition(), dirs[i], GHOST_PROBE_DISTANCE, canUseDoor, canUseDoor))
         {
-            bestDistance = distance;
-            bestDirection = validDirections[index];
+            valid.push_back(dirs[i]);
         }
     }
 
-    return bestDirection;
-}
-
-// Chooses the next movement direction for a ghost.
-// ghost is the ghost to steer, targetWorldPosition is the target,
-// randomize decides whether frightened mode should choose randomly,
-// and allowReverse decides whether the reverse direction is allowed.
-Vector2D GameManager::ChooseGhostDirection(const Ghost* ghost,
-                                           Vector2D targetWorldPosition,
-                                           bool randomize,
-                                           bool allowReverse) const
-{
-    std::vector<Vector2D> validDirections;
-    CollectValidGhostDirections(ghost, allowReverse, validDirections);
-
-    if (validDirections.empty())
-    {
-        Vector2D reverseDirection = GetOppositeDirection(ghost->GetDirection());
-        validDirections.push_back(reverseDirection);
-    }
+    // If nothing is valid, allow the reverse as a last resort
+    if (valid.empty())
+        valid.push_back(reverse);
 
     if (randomize)
+        return valid[GetRandomValue(0, (int)valid.size() - 1)];
+
+    // Pick whichever direction puts the ghost closest to its target.
+    Vector2D targetTile = WorldToTile(target);
+    Vector2D ghostTile = WorldToTile(ghost->GetPosition());
+    Vector2D best = valid[0];
+    int bestDist = 999999;
+
+    for (int i = 0; i < (int)valid.size(); i++)
     {
-        return ChooseRandomDirection(validDirections);
+        Vector2D next = AddVectors(ghostTile, valid[i]);
+        int dist = (int)(std::fabs(next.x - targetTile.x) + std::fabs(next.y - targetTile.y));
+        if (dist < bestDist)
+        {
+            bestDist = dist;
+            best     = valid[i];
+        }
     }
 
-    return ChooseClosestDirection(ghost, validDirections, targetWorldPosition);
+    return best;
 }
